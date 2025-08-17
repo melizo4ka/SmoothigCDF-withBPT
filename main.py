@@ -46,7 +46,14 @@ class CustomKDE:
 """
 
 
-def create_cdf(num_values, num_samples, distribution_type='normal', params={}):
+def get_used_samples(samples_to_get, x_samples, cdf_samples):
+    """ Selects a subset of evenly spaced samples from the input arrays"""
+    total_points = samples_to_get - 2
+    indices = np.linspace(0, len(x_samples) - 1, total_points, dtype=int)
+    return x_samples[indices], cdf_samples[indices]
+
+
+def create_cdf(num_samples, distribution_type='normal', params={}):
     """
     Creates and plots the CDF of a specified distribution.
 
@@ -66,62 +73,55 @@ def create_cdf(num_values, num_samples, distribution_type='normal', params={}):
             - cdf_samples (np.ndarray): Corresponding CDF values at x_samples or samples drawn from the distribution.
     """
     start = 0
+    stop = -np.log(1/num_samples)
+    # number of values of cdf calculated to create it
+    num_values = 100
 
     if distribution_type == 'normal':
         mean = params.get('mean', 0)
         std = params.get('std', 1)
-        stop = 10
         x = np.linspace(start, stop, num_values)
         cdf_values = norm.cdf(x, mean, std)
         label = f'Normal(mean={mean}, std={std})'
-        x_samples = np.linspace(start, stop, num_samples)
-        cdf_samples = norm.cdf(x_samples, mean, std)
+        x_samples, cdf_samples = get_used_samples(num_samples, x, cdf_values)
 
     elif distribution_type == 'exponential':
         scale = params.get('scale', 1)
-        stop = 10
         x = np.linspace(start, stop, num_values)
         cdf_values = expon.cdf(x, scale=scale)
         label = f'Exponential(scale={scale})'
-        x_samples = np.linspace(start, stop, num_samples)
-        cdf_samples = expon.cdf(x_samples, scale=scale)
+        x_samples, cdf_samples = get_used_samples(num_samples, x, cdf_values)
 
     elif distribution_type == 'uniform':
-        stop = params.get('high', 1)
+        stop = params.get('high', 30)
         x = np.linspace(start, stop, num_values)
         cdf_values = uniform.cdf(x, start, stop - start)
         label = f'Uniform(low={start}, high={stop})'
-        x_samples = np.linspace(start, stop, num_samples)
-        cdf_samples = uniform.cdf(x_samples, start, stop - start)
+        x_samples, cdf_samples = get_used_samples(num_samples, x, cdf_values)
 
-    elif distribution_type == 'beta':
+    elif distribution_type == 'minus_ln_one_minus_beta':
         alpha = params.get('alpha', 2)
         beta_param = params.get('beta', 2)
-        # Beta distributions are defined in [0, 1]
-        stop = 1
         x = np.linspace(start, stop, num_values)
-        cdf_values = beta.cdf(x, alpha, beta_param)
-        label = f'Beta(alpha={alpha}, beta={beta_param})'
-        x_samples = np.linspace(start, stop, num_samples)
-        cdf_samples = beta.cdf(x_samples, alpha, beta_param)
+        cdf_values = 1 - beta.cdf(1 - np.exp(-x), alpha, beta_param)
+        label = f'-ln(1 - Beta(alpha={alpha}, beta={beta_param}))'
+        x_samples, cdf_samples = get_used_samples(num_samples, x, cdf_values)
 
     elif distribution_type == 'erlang':
         shape = params.get('shape', 2)
         rate = params.get('rate', 1)
-        stop = 10
         x = np.linspace(start, stop, num_values)
         cdf_values = erlang_cdf(k=shape, lam=rate, x=x)
         label = f'Erlang(shape={shape}, rate={rate})'
         # can also use sample_erlang_manual
-        x_samples = np.sort(sample_erlang(shape, rate, num_samples))
+        x_samples = np.sort(sample_erlang(shape, rate, num_samples, stop))
         cdf_samples = erlang_cdf(k=shape, lam=rate, x=x_samples)
 
     else:
         print("Wrong distribution type.")
         return None
 
-    # save_path='cdf_plot.png' as last argument
-    # plotting_cdf(cdf_values, x, label)
+    # plotting_cdf(cdf_values, x, label, save_path='cdf_plot.png')
 
     return cdf_values, x, start, stop, x_samples, cdf_samples
 
@@ -152,10 +152,9 @@ def define_cdf():
             - bpt_order: Bernstein phase-type approximation order, adjusted if necessary.
     """
 
-    print("Select a CDF distribution: 1. Normal 2. Exponential 3. Uniform 4. Beta 5. Erlang")
+    print("Select a CDF distribution: 1. Normal 2. Exponential 3. Uniform 4. Adjusted Beta 5. Erlang")
     choice = input("Enter your choice: ")
     params = {}
-    num_values = 100
 
     if choice == '1':
         distribution_type = 'normal'
@@ -171,7 +170,7 @@ def define_cdf():
         params['high'] = float(input("Enter upper bound (default 1): ") or 1)
 
     elif choice == '4':
-        distribution_type = 'beta'
+        distribution_type = 'minus_ln_one_minus_beta'
         params['alpha'] = float(input("Enter alpha shape parameter (default 2): ") or 2)
         params['beta'] = float(input("Enter beta shape parameter (default 2): ") or 2)
 
@@ -184,11 +183,11 @@ def define_cdf():
         print("Invalid choice.")
         return
 
-    num_samples = int(input("Number of samples from the CDF (default 10) n: ") or 10)
+    num_samples = int(input("Number of samples from the CDF (default 30) n: ") or 30)
 
-    cdf_values_orig, x_orig, start_orig, stop_orig, x_samples, cdf_samples = create_cdf(num_values, num_samples, distribution_type, params)
+    cdf_values_orig, x_orig, start_orig, stop_orig, x_samples, cdf_samples = create_cdf(num_samples, distribution_type, params)
 
-    return cdf_values_orig, x_orig, start_orig, stop_orig, num_values, x_samples, cdf_samples
+    return cdf_values_orig, x_orig, start_orig, stop_orig, x_samples, cdf_samples
 
 
 def wasserstein_distance(cdf1, cdf2_array, x_range, x_samples, num_segments=10):
@@ -248,82 +247,76 @@ def kolmogorov_smirnov_distance(cdf1, cdf2_array, x_range, x_samples, num_points
     return max_distance
 
 
-def bph(cdf_function, x_values, start, stop, order=5):
+def bph(cdf_function, x_values, order=5):
     """
-    Computes the Bernstein phase-type approximation of a CDF using your original exponential algorithm.
+    Computes the Bernstein Exponential approximation of a CDF.
 
     Args:
-        cdf_function: interpolated CDF function
-        x_values: evaluation points in original domain
-        start: start of the domain
-        stop: end of the domain
+        cdf_function: function that returns CDF values F(x)
+        x_values: evaluation points
         order: order of the approximation
 
     Returns:
-        array: Approximated CDF values with proper boundary conditions (0 at start, 1 at stop)
+        array: Approximated CDF values
     """
     n = order
+    bernstein_approx = np.zeros_like(x_values, dtype=float)
 
-    x_normalized = (x_values - start) / (stop - start)
-    x_normalized = np.clip(x_normalized, 1e-10, 1 - 1e-10)
-    t_values = -np.log(x_normalized)
+    for i in range(n + 1):
+        if i == 0:
+            cdf_val = 1.0
+        else:
+            # sampling CDF at -log(i/n)
+            sample_point = -np.log(i / n)
+            cdf_val = cdf_function(sample_point)
+        binom_coeff = comb(n, i, exact=False)
+        exp_neg_x = np.exp(-x_values)
+        bernstein_basis = binom_coeff * (exp_neg_x ** i) * ((1 - exp_neg_x) ** (n - i))
+        bernstein_approx += cdf_val * bernstein_basis
 
-    bernstein_bph = np.zeros_like(x_values, dtype=float)
-
-    boundary_mask_start = (x_values <= start + 1e-10)
-    boundary_mask_end = (x_values >= stop - 1e-10)
-    bernstein_bph[boundary_mask_start] = 0.0
-    bernstein_bph[boundary_mask_end] = 1.0
-
-    interior_mask = ~(boundary_mask_start | boundary_mask_end)
-    t_interior = t_values[interior_mask]
-
-    if len(t_interior) > 0:
-        for i in range(1, n + 1):
-            eval_point = start + (stop - start) * np.exp(-np.log(i / n))
-            eval_point = np.clip(eval_point, start, stop)
-            cdf_val = cdf_function(eval_point)
-
-            binom_coeff = comb(n, i, exact=False)
-            bernstein_basis = binom_coeff * np.exp(-i * t_interior) * (1 - np.exp(-t_interior)) ** (n - i)
-
-            bernstein_bph[interior_mask] += cdf_val * bernstein_basis
-
-    return bernstein_bph
+    return bernstein_approx
 
 
 def erlang_cdf(k, lam, x):
-    """Compute the CDF of an Erlang distribution with shape parameter k and rate lam."""
+    """Computes the CDF of an Erlang distribution with shape parameter k and rate lam."""
     return stats.erlang.cdf(x, a=k, scale=1/lam)
 
 
-def sample_erlang(k, lam, size=1):
-    """Generate samples from an Erlang distribution with shape k and rate lam."""
-    return stats.erlang.rvs(a=k, scale=1/lam, size=size)
+def sample_erlang(k, lam, size, stop):
+    """Generates 'size' samples from Erlang(k, lam)."""
+    samples = []
+    while len(samples) < size - 1:
+        new_samples = stats.erlang.rvs(a=k, scale=1/lam, size=size)
+        samples.extend(new_samples[new_samples < stop])
+    samples = np.sort(samples[:size - 1])
+    return np.append(samples, stop)
 
 
-def sample_erlang_manual(k, lam, size=1):
-    """
-    Generate samples from an Erlang distribution by summing k independent Exponential(lambda) samples.
-
-    Parameters:
-    - k: Shape parameter (must be an integer, number of summed exponentials)
-    - lam: Rate parameter (lambda)
-    - size: Number of Erlang samples to generate
-
-    Returns:
-    - Samples from an Erlang(k, lambda) distribution
-    """
-    return np.sum(np.random.exponential(scale=1 / lam, size=(size, k)), axis=1)
+def sample_erlang_manual(k, lam, size, stop):
+    """Generates 'size' samples from Erlang(k, lam) by summing exponential."""
+    samples = []
+    while len(samples) < size - 1:
+        new = np.sum(
+            np.random.exponential(scale=1/lam, size=(size, k)),
+            axis=1
+        )
+        samples.extend(new[new < stop])
+    samples = np.sort(samples[:size - 1])
+    return np.append(samples, stop)
 
 
 def plot_approx(x_orig, cdf, x_samples, approximated_cdf, bpt_order):
+    """Plots the given CDF and the BPH Approximation, saves the plot."""
     plt.figure(figsize=(10, 6))
     plt.plot(x_orig, cdf, color='red', linewidth=2, label='Original CDF')
     plt.plot(x_samples, approximated_cdf, color='blue', linewidth=2, label='BPH Approximation', linestyle='-')
     plt.xlabel('x')
     plt.ylabel('CDF')
-    plt.title(f'CDF vs. BPH Approximation (order={bpt_order})')
+    if wasserstein_dist is not None and ks_dist is not None:
+        title = f'CDF vs. BPH Approximation (order={bpt_order})\nWD={wasserstein_dist:.4f}, KSD={ks_dist:.4f}'
+    else:
+        title = f'CDF vs. BPH Approximation (order={bpt_order})'
+    plt.title(title)
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.ylim(-0.05, 1.05)
@@ -332,33 +325,35 @@ def plot_approx(x_orig, cdf, x_samples, approximated_cdf, bpt_order):
 
 
 if __name__ == "__main__":
-    cdf, x_orig, start, stop, num_values, x_samples, cdf_samples = define_cdf()
+    cdf, x_orig, start_value, stop_value, x_samples, cdf_samples = define_cdf()
 
-    user_input = int(input("Order of BPT (default 125) m: ") or 125)
-    bpt_order = int(user_input) if user_input else 125
-    bpt_order = min(bpt_order, 125)
+    user_input = int(input("Order of BPT (default 8) m: ") or 8)
+    bpt_order = int(user_input) if user_input else 8
 
-    x_samples_extended = np.concatenate(([start], x_samples, [stop]))
+    subset_x, subset_cdf = get_used_samples(bpt_order, x_samples, cdf_samples)
+
+    x_samples_extended = np.concatenate(([start_value], x_samples, [stop_value]))
     cdf_samples_extended = np.concatenate(([0.0], cdf_samples, [1.0]))
     sort_indices = np.argsort(x_samples_extended)
     x_samples_extended = x_samples_extended[sort_indices]
     cdf_samples_extended = cdf_samples_extended[sort_indices]
     cdf_function = interp1d(x_samples_extended, cdf_samples_extended, kind='linear', bounds_error=False, fill_value=(0.0, 1.0))
 
-    approximated_cdf = bph(cdf_function, x_samples_extended, start, stop, bpt_order)
-    plot_approx(x_orig, cdf, x_samples_extended, approximated_cdf, bpt_order)
+    approximated_cdf = bph(cdf_function, x_samples_extended, bpt_order)
 
     wasserstein_dist = wasserstein_distance(
         cdf1=cdf_function,
         cdf2_array=approximated_cdf,
-        x_range=(start, stop),
+        x_range=(start_value, stop_value),
         x_samples=x_samples_extended
     )
     ks_dist = kolmogorov_smirnov_distance(
         cdf1=cdf_function,
         cdf2_array=approximated_cdf,
-        x_range=(start, stop),
+        x_range=(start_value, stop_value),
         x_samples=x_samples_extended
     )
 
     print("Wasserstein Distance is ", wasserstein_dist, ", Kolmogorov-Smirnov Distance is ", ks_dist)
+
+    plot_approx(x_orig, cdf, x_samples_extended, approximated_cdf, bpt_order)
